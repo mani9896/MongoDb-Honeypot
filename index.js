@@ -4,6 +4,16 @@ const fs = require('fs');
 const bson = require('bson');
 const parseArgs = require('minimist');
 
+var nodemailer = require('nodemailer');
+
+var transporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: {
+        user: '2019282@iiitdmj.ac.in',
+        pass: 'aiuooobbsnpacwci'
+    }
+});
+
 var args = parseArgs(process.argv);
 
 if(args.h || args.help) {
@@ -35,8 +45,29 @@ console.log = function(data) {
     oldLog("[" + new Date().toISOString() + "] " + data)
 }
 
+let ipSet = new Set();
+
 function printFromAddress(fromIp, data) {
     console.log("[" + fromIp + " -> S] " + data);
+    let ip = fromIp.split(":")[2];
+    if (!ipSet.has(ip)) {
+        console.log(data);
+        var mailOptions = {
+            from: '2019282@iiitdmj.ac.in',
+            to: 'mananjethwani02@gmail.com',
+            subject: 'Alert intrusion Detected!!',
+            text: `Received request from ${fromIp} to the server \n the data sent is as follows- ${data}`
+        };
+    
+        transporter.sendMail(mailOptions, function (error, info) {
+            if (error) {
+                console.log(error);
+            } else {
+                console.log('Email sent: ' + info.response);
+            }
+        });
+        ipSet.add(ip);
+    }
 }
 function printToAddress(fromIp, data) {
     console.log("[S -> " + fromIp + "] " + data);
@@ -46,35 +77,43 @@ var server = net.createServer(function (socket) {
     var clientId = socket.remoteAddress + ":" + socket.remotePort;
     var tag = "[" + clientId + "] ";
     console.log(clientId + " connected.")
-    socket.on('data', function (msg) {
-        console.log('<< From client to proxy ', msg.toString());
-        var serviceSocket = new net.Socket();
-        console.log(clientId + " -> Server:");
-        var packet = parseMessage(msg, clientId);
-        if(packet != null && packet instanceof OpQuery) {
-            console.log(packet.query.toString());
-            var fingerprint = "";
-            if(packet.query && packet.query.length > 0 && packet.query[0].client) {
-                fingerprint = packet.query[0].client;
+    try {
+        socket.on('data', function (msg) {
+            console.log('<< From client to proxy ', msg.toString());
+            var serviceSocket = new net.Socket();
+            console.log(clientId + " -> Server:");
+            var packet = parseMessage(msg, clientId);
+            if(packet != null && packet instanceof OpQuery) {
+                console.log(packet.query.toString());
+                var fingerprint = "";
+                if(packet.query && packet.query.length > 0 && packet.query[0].client) {
+                    fingerprint = packet.query[0].client;
+                }
+                if(packet.query && packet.query.length > 0) {
+                    printFromAddress(clientId, "login", JSON.stringify(packet.query[0]))
+                } else {
+                    printFromAddress(clientId, JSON.stringify(packet.query[0]))
+                }
             }
-            if(packet.query && packet.query.length > 0) {
-                printFromAddress(clientId, "login", JSON.stringify(packet.query[0]))
-            } else {
-                printFromAddress(clientId, JSON.stringify(packet.query[0]))
+            try {
+                serviceSocket.connect(MONGODB_PORT, MONGODB_HOST, function () {
+                    serviceSocket.write(msg);
+                });
+                serviceSocket.on("data", function (data) {
+                    parseMessage(data, clientId);
+                    printToAddress(clientId, data);
+                    socket.write(data);
+                });
+                socket.on("close", function () {
+                    console.log("error");
+                })
+            } catch (err) {
+                console.log("hello");
             }
-        }
-        serviceSocket.connect(MONGODB_PORT, MONGODB_HOST, function () {
-            serviceSocket.write(msg);
         });
-        serviceSocket.on("data", function (data) {
-            //console.log('<< From remote to proxy', data.toString());
-            //console.log("Server -> " + clientId + ":");
-            parseMessage(data, clientId);
-            printToAddress(clientId, data);
-            socket.write(data);
-            //console.log('>> From proxy to client', data.toString());
-        });
-    });
+    } catch (err) {
+        console.log("error");
+    }
     socket.on('close', function() {
         console.log(clientId + " disconnected.");
     });
@@ -86,9 +125,6 @@ var offset = 0;
 function parseMessage(data, identifier) {
     offset = 0;
     var header = new MsgHeader(data);
-    //Only opcodes 2004(QUERY) and 1(REPLY) are currently implemented.
-    //Though there are other opcodes, these are not used as frequently.
-    //This should cover a decent amount of data.
     switch(header.opCode) {
         case 2004:
             var packet = new OpQuery(data);
@@ -135,7 +171,6 @@ function OpQuery(data) {
     var docs = [];
     bson.deserializeStream(data, offset, 1, docs, this.numToSkip);
     this.query = docs;
-    //We're not finished yet, which implies the optional returnFieldsSelector is set.
     if(offset < data.length) {
         var fields = [];
         bson.deserializeStream(data, offset, 1, fields, this.numToSkip);
