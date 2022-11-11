@@ -1,0 +1,16 @@
+
+version: "2"
+services:
+  mongo:
+    image: mongo
+    ports:
+      - "27016:27017"
+    volumes:
+      - data-db:/data/db
+  honey-pot-service:
+    build: ./
+    ports:
+      - "27017:27017"
+
+volumes:
+    data-db:
